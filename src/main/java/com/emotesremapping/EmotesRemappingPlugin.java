@@ -156,6 +156,10 @@ public class EmotesRemappingPlugin extends Plugin
 	private int pendingUiRefreshTicks;
 	private int emoteIndex;
 
+	// Snapshotted vanilla positions per widget, captured before the plugin
+	// moves anything; used to pair and order emotes reliably across relayouts
+	private final Map<Widget, Long> vanillaPositions = new HashMap<>();
+
 	// Set after clicking an emote; blocks further emote clicks until the
 	// animation actually starts (or times out) to prevent misclicks
 	private boolean clickLocked;
@@ -204,6 +208,8 @@ public class EmotesRemappingPlugin extends Plugin
 			return;
 		}
 
+		// The interface was (re)created; old widget snapshots are stale
+		vanillaPositions.clear();
 		scheduleUiRefresh(UI_REFRESH_TICKS);
 	}
 
@@ -215,7 +221,21 @@ public class EmotesRemappingPlugin extends Plugin
 			clickLocked = false;
 		}
 
-		if ((!uiDirty && pendingUiRefreshTicks <= 0) || !isEmoteTabOpen())
+		if (!isEmoteTabOpen())
+		{
+			return;
+		}
+
+		// Wait out the refresh delay before applying. This debounces
+		// bursts of edits (e.g. unfavoriting several emotes quickly) so
+		// the grid doesn't shift under the cursor mid-click.
+		if (pendingUiRefreshTicks > 0)
+		{
+			--pendingUiRefreshTicks;
+			return;
+		}
+
+		if (!uiDirty)
 		{
 			return;
 		}
@@ -223,10 +243,6 @@ public class EmotesRemappingPlugin extends Plugin
 		if (applyUi())
 		{
 			uiDirty = false;
-			if (pendingUiRefreshTicks > 0)
-			{
-				--pendingUiRefreshTicks;
-			}
 		}
 	}
 
@@ -235,6 +251,17 @@ public class EmotesRemappingPlugin extends Plugin
 	{
 		if (!EmotesRemappingConfig.GROUP.equals(event.getGroup()))
 		{
+			return;
+		}
+
+		if (EmotesRemappingConfig.KEY_SORT_MODE.equals(event.getKey())
+			|| EmotesRemappingConfig.KEY_SHOW_FAVORITES_ONLY.equals(event.getKey()))
+		{
+			// Deliberate one-off setting changes should apply right away
+			// instead of riding the click debounce, so the layout (e.g.
+			// restoring vanilla order for Sort Mode "None") updates as
+			// soon as the setting is changed
+			clientThread.invokeLater(this::applyUiIfOpen);
 			return;
 		}
 
@@ -279,16 +306,31 @@ public class EmotesRemappingPlugin extends Plugin
 		if ("Favorite".equals(option) || "Unfavorite".equals(option))
 		{
 			Set<String> favorites = getFavorites();
+			boolean nowFavorite;
 			if ("Favorite".equals(option))
 			{
-				favorites.add(emoteKey);
+				nowFavorite = favorites.add(emoteKey);
 			}
 			else
 			{
-				favorites.remove(emoteKey);
+				nowFavorite = !favorites.remove(emoteKey);
 			}
 
 			setFavorites(favorites);
+
+			// Give immediate feedback on the clicked emote; the full
+			// repack of the grid stays debounced so it doesn't shift
+			// under the cursor during rapid edits
+			if (!nowFavorite && config.showFavoritesOnly())
+			{
+				resetEntryWidgetState(entry, true);
+			}
+			else
+			{
+				applyWidgetActions(entry.getClickbox(), emoteKey, favorites);
+				entry.getClickbox().revalidate();
+			}
+
 			scheduleUiRefresh(UI_REFRESH_TICKS);
 			event.consume();
 			return;
@@ -417,7 +459,18 @@ public class EmotesRemappingPlugin extends Plugin
 		}
 
 		int totalRows = Math.max(1, (visibleEmotes.size() + columns - 1) / columns);
-		scrollable.setScrollHeight(totalRows * emoteHeight);
+		int scrollHeight = totalRows * emoteHeight;
+		scrollable.setScrollHeight(scrollHeight);
+
+		// Shrinking the content (e.g. after unfavoriting with "Show
+		// Favorites Only") can leave the scroll offset past the new
+		// content, rendering an apparently empty tab. Clamp it back.
+		int viewHeight = scrollable.getHeight();
+		int maxScroll = viewHeight > 0 ? Math.max(0, scrollHeight - viewHeight) : 0;
+		if (scrollable.getScrollY() > maxScroll)
+		{
+			scrollable.setScrollY(maxScroll);
+		}
 		scrollable.revalidateScroll();
 	}
 
@@ -431,7 +484,8 @@ public class EmotesRemappingPlugin extends Plugin
 				continue;
 			}
 
-			EmoteEntryBuilder builder = findOrCreateBuilder(builders, child.getOriginalX(), child.getOriginalY());
+			long coord = vanillaPosition(child);
+			EmoteEntryBuilder builder = findOrCreateBuilder(builders, coord);
 			if (child.getType() == WidgetType.GRAPHIC && child.getSpriteId() >= 0)
 			{
 				builder.graphic = child;
@@ -475,19 +529,31 @@ public class EmotesRemappingPlugin extends Plugin
 		return emotes;
 	}
 
-	private EmoteEntryBuilder findOrCreateBuilder(List<EmoteEntryBuilder> builders, int originalX, int originalY)
+	private EmoteEntryBuilder findOrCreateBuilder(List<EmoteEntryBuilder> builders, long coord)
 	{
 		for (EmoteEntryBuilder builder : builders)
 		{
-			if (builder.originalX == originalX && builder.originalY == originalY)
+			if (builder.coord == coord)
 			{
 				return builder;
 			}
 		}
 
-		EmoteEntryBuilder builder = new EmoteEntryBuilder(originalX, originalY);
+		EmoteEntryBuilder builder = new EmoteEntryBuilder(coord);
 		builders.add(builder);
 		return builder;
+	}
+
+	/**
+	 * Returns the widget's vanilla position, snapshotted the first time the
+	 * widget is seen. The plugin repositions emote widgets, so their live
+	 * originalX/originalY values can't be relied on for pairing and ordering
+	 * after the first layout pass.
+	 */
+	private long vanillaPosition(Widget widget)
+	{
+		return vanillaPositions.computeIfAbsent(widget,
+			w -> ((long) w.getOriginalX() << 32) | (w.getOriginalY() & 0xFFFFFFFFL));
 	}
 
 	private List<EmoteEntry> getOrderedEmotes(List<EmoteEntry> emotes)
@@ -1067,16 +1133,14 @@ public class EmotesRemappingPlugin extends Plugin
 
 	private static class EmoteEntryBuilder
 	{
-		private final int originalX;
-		private final int originalY;
+		private final long coord;
 		private Widget clickbox;
 		private Widget graphic;
 		private String label = "";
 
-		private EmoteEntryBuilder(int originalX, int originalY)
+		private EmoteEntryBuilder(long coord)
 		{
-			this.originalX = originalX;
-			this.originalY = originalY;
+			this.coord = coord;
 		}
 	}
 }

@@ -10,6 +10,9 @@ public interface EmotesRemappingConfig extends Config
 {
 	String GROUP = "emotesremapping";
 
+	String KEY_SORT_MODE = "sortMode";
+	String KEY_SHOW_FAVORITES_ONLY = "showFavoritesOnly";
+
 	@ConfigSection(
 		name = "Reordering",
 		description = "Emote reordering and favorites options",
@@ -25,7 +28,7 @@ public interface EmotesRemappingConfig extends Config
 	String ctc3Section = "ctc3";
 
 	@ConfigItem(
-		keyName = "sortMode",
+		keyName = KEY_SORT_MODE,
 		name = "Sort Mode",
 		description = "How to sort emotes in the tab",
 		section = reorderingSection,
@@ -37,7 +40,7 @@ public interface EmotesRemappingConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "showFavoritesOnly",
+		keyName = KEY_SHOW_FAVORITES_ONLY,
 		name = "Show Favorites Only",
 		description = "Only show favorite emotes in the emote tab",
 		section = reorderingSection,
