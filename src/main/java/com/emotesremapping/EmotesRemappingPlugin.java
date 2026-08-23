@@ -483,7 +483,17 @@ public class EmotesRemappingPlugin extends Plugin
 				ordered.sort(Comparator.comparing(emote -> sortableName(emote.getDisplayName())));
 				break;
 			case FAVORITES_FIRST:
-				ordered.sort(Comparator.comparingInt(emote -> favorites.contains(emote.getKey()) ? 0 : 1));
+				// Keep favorites in the order they were favorited (the
+				// favorites config preserves insertion order), followed by
+				// the remaining emotes in their vanilla order
+				List<String> favoriteOrder = new ArrayList<>(favorites);
+				ordered.sort(Comparator
+					.comparingInt((EmoteEntry emote) -> favorites.contains(emote.getKey()) ? 0 : 1)
+					.thenComparingInt(emote ->
+					{
+						int index = favoriteOrder.indexOf(emote.getKey());
+						return index == -1 ? Integer.MAX_VALUE : index;
+					}));
 				break;
 			default:
 				break;
