@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -367,6 +368,24 @@ public class EmotesRemappingPlugin extends Plugin
 		Set<String> favorites = getFavorites();
 		List<EmoteEntry> orderedEmotes = getOrderedEmotes(emotes);
 		List<EmoteEntry> visibleEmotes = new ArrayList<>();
+
+		// Hide any widget not belonging to a recognized emote entry so
+		// repositioned emotes never overlap leftovers sitting at their
+		// vanilla positions (e.g. with "Show Favorites Only" enabled)
+		Set<Widget> handledWidgets = new HashSet<>();
+		for (EmoteEntry entry : emotes)
+		{
+			handledWidgets.add(entry.getClickbox());
+			handledWidgets.add(entry.getGraphic());
+		}
+		for (Widget child : children)
+		{
+			if (child != null && !handledWidgets.contains(child))
+			{
+				child.setHidden(true);
+				child.revalidate();
+			}
+		}
 
 		for (EmoteEntry emote : orderedEmotes)
 		{
